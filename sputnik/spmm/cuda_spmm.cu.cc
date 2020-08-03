@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <math.h>
-
+#include <functional>
 #include <unordered_map>
 
 #include "sputnik/barrier.h"
@@ -29,7 +29,6 @@
 #include "sputnik/spmm/spmm_config.h"
 #include "sputnik/tiling_utils.h"
 #include "sputnik/vector_utils.h"
-#include "absl/strings/str_format.h"
 
 namespace sputnik {
 
@@ -310,7 +309,9 @@ using FloatTable = std::unordered_map<std::string, FloatSpmmFn>;
 
 std::string MakeHandle(int m, int k, int n, int nonzeros) {
   // NOTE: We don't include the number of nonzeros currently.
-  return absl::StrFormat("%d_%d_%d", m, k, n);
+  return std::to_string(m) + "_" +
+    std::to_string(k) + "_" +
+    std::to_string(n);
 }
 
 FloatTable* GetFloatTable() {

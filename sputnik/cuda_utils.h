@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_SPUTNIK_CUDA_UTILS_H_
 #define THIRD_PARTY_SPUTNIK_CUDA_UTILS_H_
 
+#include <string>
+
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -49,7 +51,7 @@ struct __align__(16) short8 {
 #define CUDA_CALL(code)                                     \
   do {                                                      \
     cudaError_t status = code;                              \
-    string err = cudaGetErrorString(status);                \
+    std::string err = cudaGetErrorString(status);	    \
     CHECK_EQ(status, cudaSuccess) << "CUDA Error: " << err; \
   } while (0)
 

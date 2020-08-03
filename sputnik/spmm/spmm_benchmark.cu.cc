@@ -51,7 +51,6 @@ typedef std::function<cudaError_t(
     FloatSpmmFn;
 
 void BenchmarkFn(FloatSpmmFn spmm_fn, benchmark::State& state) {
-  BenchmarkUseRealTime();
   const int kDimM = state.range(0);
   const int kDimK = state.range(1);
   const int kDimN = state.range(2);
@@ -113,7 +112,6 @@ typedef std::function<cudaError_t(
     HalfSpmmFn;
 
 void BenchmarkFn(HalfSpmmFn spmm_fn, benchmark::State& state) {
-  BenchmarkUseRealTime();
   const int kDimM = state.range(0);
   const int kDimK = state.range(1);
   const int kDimN = state.range(2);
@@ -151,20 +149,20 @@ void BenchmarkFn(HalfSpmmFn spmm_fn, benchmark::State& state) {
   LogBenchmarkArguments(state);
 }
 
-void BenchmarkArgs(testing::Benchmark* b) {
-  const std::vector<std::vector<int>> benchmarks_14 = {
+void BenchmarkArgs(benchmark::internal::Benchmark* b) {
+  const std::vector<std::vector<int64_t>> benchmarks_14 = {
       {89, 48, 12544, 427},   {176, 89, 3136, 1566},   {176, 176, 3136, 3098},
       {360, 176, 784, 6336},  {360, 360, 784, 12960},  {720, 360, 196, 25920},
       {720, 720, 196, 51840}, {1432, 720, 49, 103105}, {1432, 1432, 49, 205064},
   };
 
-  const std::vector<std::vector<int>> benchmarks_18 = {
+  const std::vector<std::vector<int64_t>> benchmarks_18 = {
       {115, 56, 12544, 644},  {232, 115, 3136, 2668},  {232, 232, 3136, 5382},
       {464, 232, 784, 10765}, {464, 464, 784, 21530},  {920, 464, 196, 42688},
       {920, 920, 196, 84640}, {1840, 920, 49, 169280}, {1840, 1840, 49, 338560},
   };
 
-  const std::vector<std::vector<int>> benchmarks_22 = {
+  const std::vector<std::vector<int64_t>> benchmarks_22 = {
       {140, 72, 12544, 1008},    {280, 140, 3136, 3920},
       {280, 280, 3136, 7840},    {560, 280, 784, 15680},
       {560, 560, 784, 31360},    {1128, 560, 196, 63169},
@@ -183,7 +181,7 @@ void BenchmarkArgs(testing::Benchmark* b) {
 
 #define REGISTER_BENCHMARK(name, fn)                                  \
   void BM_##name(benchmark::State& state) { BenchmarkFn(fn, state); } \
-  BENCHMARK(BM_##name)->Apply(BenchmarkArgs)
+  BENCHMARK(BM_##name)->Apply(BenchmarkArgs)->UseRealTime();
 
 #define REGISTER_FLOAT_BENCHMARK_HELPER(name, tname, fn, stype, dtype, mt, kt, \
                                         nt, bs)                                \
@@ -227,7 +225,7 @@ REGISTER_FLOAT_BENCHMARK(CudaSpmmEx, CudaSpmmEx, float4, float, 4, 32, 8, 8);
 
 #define REGISTER_BENCHMARK(name, fn)                                  \
   void BM_##name(benchmark::State& state) { BenchmarkFn(fn, state); } \
-  BENCHMARK(BM_##name)->Apply(BenchmarkArgs)
+  BENCHMARK(BM_##name)->Apply(BenchmarkArgs)->UseRealTime();
 
 #define REGISTER_HALF_BENCHMARK_HELPER(name, tname, fn, stype, dtype, mt, kt, \
                                        nt, bs)                                \
@@ -270,7 +268,6 @@ REGISTER_HALF_BENCHMARK(CudaSpmmEx, CudaSpmmEx, half8, half2, 4, 32, 8, 8);
 #undef CONCAT_
 
 void BM_CudaSpmm_Generic(benchmark::State& state) {
-  BenchmarkUseRealTime();
   const int kDimM = state.range(0);
   const int kDimK = state.range(1);
   const int kDimN = state.range(2);
@@ -308,72 +305,10 @@ void BM_CudaSpmm_Generic(benchmark::State& state) {
   LogBenchmarkArguments(state);
 }
 
-BENCHMARK(BM_CudaSpmm_Generic)->Apply(BenchmarkArgs);
-
-void BM_CusparseSpmm(benchmark::State& state) {
-  BenchmarkUseRealTime();
-  const int kDimM = state.range(0);
-  const int kDimK = state.range(1);
-  const int kDimN = state.range(2);
-  const int kNonZeros = state.range(3);
-
-  // Do not pad the rows for our CuSparse benchmarks.
-  const int kRowPadding = 0;
-
-  // Create the sparse matrix on the gpu.
-  absl::BitGen generator;
-  CudaSparseMatrix<float> sparse_matrix_gpu(kDimM, kDimK, kNonZeros,
-                                            RANDOM_UNIFORM, &generator,
-                                            IDENTITY, kRowPadding);
-
-  // Create the dense matrix on the gpu.
-  CudaMatrix<float> matrix_gpu(kDimK, kDimN, &generator);
-
-  // Create the output matrix on the gpu.
-  CudaMatrix<float> output_matrix_gpu(kDimM, kDimN, &generator);
-
-  // Setup CuSparse specific data structures.
-  cusparseHandle_t handle;
-  CUSPARSE_CALL(cusparseCreate(&handle));
-  CUSPARSE_CALL(cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST));
-  float alpha = 1.0, beta = 0.0;
-  cusparseMatDescr_t mdesc;
-  CUSPARSE_CALL(cusparseCreateMatDescr(&mdesc));
-  CUSPARSE_CALL(cusparseSetMatIndexBase(mdesc, CUSPARSE_INDEX_BASE_ZERO));
-  CUSPARSE_CALL(cusparseSetMatType(mdesc, CUSPARSE_MATRIX_TYPE_GENERAL));
-
-  int batch_size = 10;
-  while (state.KeepRunningBatch(batch_size)) {
-    for (int i = 0; i < batch_size; ++i) {
-      // NOTE: CuSparse csrmm expects the left-hand side sparse matrix to be
-      // stored in compressed sparse row format, the right-hand side dense
-      // matrix to be stored in column-major format, and the output dense
-      // matrix to be stored in column-major format. However, CuSparse
-      // provides a second routine "csrmm2" which can take a row-major
-      // right-hand side dense matrix to improve memory access patterns.
-      // We do this by passing in a row-major right-hand side matrix and
-      // setting Op(B) = B^T. The output is column-major, which is different
-      // from our kernel.
-      //
-      // TODO(tgale): We should also benchmark the standard csrmm kernel
-      // with both dense matrices stored in column-major.
-      CUSPARSE_CALL(cusparseScsrmm2(
-          handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-          CUSPARSE_OPERATION_TRANSPOSE, kDimM, kDimN, kDimK, kNonZeros, &alpha,
-          mdesc, sparse_matrix_gpu.Values(), sparse_matrix_gpu.RowOffsets(),
-          sparse_matrix_gpu.ColumnIndices(), matrix_gpu.Values(), kDimN, &beta,
-          output_matrix_gpu.Values(), kDimM));
-    }
-    CUDA_CALL(cudaStreamSynchronize(nullptr));
-  }
-
-  LogBenchmarkArguments(state);
-}
-
-BENCHMARK(BM_CusparseSpmm)->Apply(BenchmarkArgs);
-
-void GemmBenchmarkArgs(testing::Benchmark* b) {
-  const std::vector<std::vector<int>> benchmarks_10 = {
+BENCHMARK(BM_CudaSpmm_Generic)->Apply(BenchmarkArgs)->UseRealTime();
+  
+void GemmBenchmarkArgs(benchmark::internal::Benchmark* b) {
+  const std::vector<std::vector<int64_t>> benchmarks_10 = {
       {64, 32, 12544, 2048},     {128, 64, 3136, 8192},
       {128, 128, 3136, 16384},   {256, 128, 784, 32768},
       {256, 256, 784, 65536},    {512, 256, 196, 131072},
@@ -381,7 +316,7 @@ void GemmBenchmarkArgs(testing::Benchmark* b) {
       {1024, 1024, 49, 1048576},
   };
 
-  const std::vector<std::vector<int>> benchmarks_14 = {
+  const std::vector<std::vector<int64_t>> benchmarks_14 = {
       {89, 48, 12544, 4272},     {176, 89, 3136, 15664},
       {176, 176, 3136, 30976},   {360, 176, 784, 63360},
       {360, 360, 784, 129600},   {720, 360, 196, 259200},
@@ -391,7 +326,7 @@ void GemmBenchmarkArgs(testing::Benchmark* b) {
       {1432, 1432, 49, 2050624},
   };
 
-  const std::vector<std::vector<int>> benchmarks_18 = {
+  const std::vector<std::vector<int64_t>> benchmarks_18 = {
       {115, 56, 12544, 6440},    {232, 115, 3136, 26680},
       {232, 232, 3136, 53824},   {464, 232, 784, 107648},
       {464, 464, 784, 215296},   {920, 464, 196, 426880},
@@ -405,7 +340,6 @@ void GemmBenchmarkArgs(testing::Benchmark* b) {
 }
 
 void BM_CublasColumnMajorGemm(benchmark::State& state) {
-  BenchmarkUseRealTime();
   int m = state.range(0);
   int k = state.range(1);
   int n = state.range(2);
@@ -439,7 +373,7 @@ void BM_CublasColumnMajorGemm(benchmark::State& state) {
   LogBenchmarkArguments(state);
 }
 
-BENCHMARK(BM_CublasColumnMajorGemm)->Apply(GemmBenchmarkArgs);
+BENCHMARK(BM_CublasColumnMajorGemm)->Apply(GemmBenchmarkArgs)->UseRealTime();
 
 cublasStatus_t RowMajorGemm(cublasHandle_t handle, bool trans_a,
                             const CudaMatrix<float>& a, bool trans_b,
@@ -461,7 +395,6 @@ cublasStatus_t RowMajorGemm(cublasHandle_t handle, bool trans_a,
 }
 
 void BM_CublasRowMajorGemm(benchmark::State& state) {
-  BenchmarkUseRealTime();
   int m = state.range(0);
   int k = state.range(1);
   int n = state.range(2);
@@ -489,10 +422,9 @@ void BM_CublasRowMajorGemm(benchmark::State& state) {
   LogBenchmarkArguments(state);
 }
 
-BENCHMARK(BM_CublasRowMajorGemm)->Apply(GemmBenchmarkArgs);
+BENCHMARK(BM_CublasRowMajorGemm)->Apply(GemmBenchmarkArgs)->UseRealTime();
 
 void BM_CublasRowMajorGemmTN(benchmark::State& state) {
-  BenchmarkUseRealTime();
   int m = state.range(0);
   int k = state.range(1);
   int n = state.range(2);
@@ -520,6 +452,6 @@ void BM_CublasRowMajorGemmTN(benchmark::State& state) {
   LogBenchmarkArguments(state);
 }
 
-BENCHMARK(BM_CublasRowMajorGemmTN)->Apply(GemmBenchmarkArgs);
+BENCHMARK(BM_CublasRowMajorGemmTN)->Apply(GemmBenchmarkArgs)->UseRealTime();
 
 }  // namespace sputnik
