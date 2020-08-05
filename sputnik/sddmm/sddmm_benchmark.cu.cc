@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <functional>
+
 #include "glog/logging.h"
 #include "sputnik/cuda_utils.h"
 #include "sputnik/matrix_utils.h"
@@ -21,7 +23,7 @@
 
 namespace sputnik {
 
-void BenchmarkArgs(testing::Benchmark* b) {
+void BenchmarkArgs(benchmark::internal::Benchmark* b) {
   const std::vector<int> kHiddenSizes = {2048, 4096, 8192};
   const std::vector<int> kBatchSizes = {8, 16, 32, 64, 128, 256};
   const std::vector<float> kDensities = {.5f, .375f, .25f, .125f, 0.015625f};
@@ -58,7 +60,6 @@ typedef std::function<cudaError_t(int, int, int, int, const int*, const int*,
     SddmmFn;
 
 void BenchmarkFn(SddmmFn sddmm_fn, benchmark::State& state) {
-  BenchmarkUseRealTime();
   const int kDimM = state.range(0);
   const int kDimK = state.range(1);
   const int kDimN = state.range(2);
@@ -98,7 +99,7 @@ void BenchmarkFn(SddmmFn sddmm_fn, benchmark::State& state) {
 
 #define REGISTER_BENCHMARK(name, fn)                                  \
   void BM_##name(benchmark::State& state) { BenchmarkFn(fn, state); } \
-  BENCHMARK(BM_##name)->Apply(BenchmarkArgs)
+  BENCHMARK(BM_##name)->Apply(BenchmarkArgs)->UseRealTime()
 
 #define REGISTER_TILED_BENCHMARK_HELPER(name, tname, fn, ltype, mt, kt, nt, \
                                         bs)                                 \
